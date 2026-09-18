@@ -24,7 +24,7 @@ Every push to a pull request runs the "Mod checks" workflow:
 
 - `info.json` is valid and has the fields Factorio requires.
 - All Lua files are syntactically correct.
-- The mod loads in the current stable headless Factorio with the base game alone, and its scripts run without errors. A small harness mod (`.github/ci/harness`) builds a roboport with debris around it and fails the check when nothing gets marked.
+- The release package builds, loads in the current stable headless Factorio with the base game alone, and its scripts run without errors. A small harness mod (`.github/ci/harness`) builds a roboport with debris around it and fails the check when nothing gets marked.
 
 A failing check names the problem in the pull request's check report; the full Factorio log is in the workflow run.
 
