@@ -7,3 +7,4 @@ data:extend({
     minimum_value = 0,
   },
 })
+local function (
