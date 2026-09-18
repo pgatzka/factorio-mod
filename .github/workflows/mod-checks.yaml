@@ -97,7 +97,7 @@ jobs:
           status=0
           {
             "$factorio" --mod-directory "$mods" --create "$RUNNER_TEMP/check.zip" &&
-            "$factorio" --mod-directory "$mods" --benchmark "$RUNNER_TEMP/check.zip" --benchmark-ticks 900 --disable-audio
+            "$factorio" --mod-directory "$mods" --benchmark "$RUNNER_TEMP/check.zip" --benchmark-ticks 900
           } > "$log" 2>&1 || status=$?
           cat "$log"
 
