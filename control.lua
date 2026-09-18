@@ -4,71 +4,62 @@
 
 local MAX_MARKED_SETTING = "factorio-mod-max-marked-debris"
 
--- Roboports are visited round-robin; the batch size is chosen so that every
--- roboport is visited about once per VISIT_PERIOD ticks.
-local VISIT_INTERVAL = 10
+-- At most one roboport is visited per tick, so the time spent per tick does
+-- not grow with the number of roboports. Visits are spaced out so that every
+-- roboport is visited about once per VISIT_PERIOD ticks; with more roboports
+-- than that, the time between two visits of a roboport grows instead.
 local VISIT_PERIOD = 600
 
-local rock_names
+-- How many marked entities beyond the limit a visit looks at before it
+-- fetches all of them; see count_marked.
+local MARKED_SLACK = 20
 
--- Rocks share the "simple-entity" type with other entities, so they are
--- identified by the same prototype flag the deconstruction planner uses.
-local function is_rock(prototype)
-  return prototype.count_as_rock_for_filtered_deconstruction
-end
+-- Thickness of the strips used to find debris that overlaps the range's edge.
+local EDGE = 0.01
 
-local function get_rock_names()
-  if rock_names then return rock_names end
-  rock_names = {}
-  local simple_entities = prototypes.get_entity_filtered({ { filter = "type", type = "simple-entity" } })
-  for name, prototype in pairs(simple_entities) do
-    if is_rock(prototype) then
-      rock_names[#rock_names + 1] = name
-    end
-  end
-  return rock_names
-end
+local debris
 
--- Area searches match every entity whose collision box touches the area,
--- which includes debris that sits outside the construction range and merely
--- overlaps its edge. Debris is in range only when its position is. To keep
--- searches cheap, the range is split: whatever touches the inner part (the
--- range shrunk by the largest debris size) is certainly in range and needs no
--- look at single entities; only the thin ring along the edge is checked
--- entity by entity.
-
--- Upper bound for the distance between the position of an entity and any
--- point of its collision box, over all prototypes of the given type that
--- pass the optional check.
-local function get_margin(type, check)
-  local margin = 0
-  for _, prototype in pairs(prototypes.get_entity_filtered({ { filter = "type", type = type } })) do
-    if not check or check(prototype) then
-      local box = prototype.collision_box
-      margin = math.max(margin, -box.left_top.x, -box.left_top.y, box.right_bottom.x, box.right_bottom.y)
-    end
-  end
-  -- Boxes can be rotated, so allow for their diagonal.
-  return margin * 1.5 + 0.1
-end
-
-local debris_kinds
-
--- Search filter (without area) and margin per kind of debris.
-local function get_debris_kinds()
-  if debris_kinds then return debris_kinds end
-  debris_kinds = {
-    tree = { filter = { type = "tree" }, margin = get_margin("tree") },
-    rock = { filter = { name = get_rock_names() }, margin = get_margin("simple-entity", is_rock) },
-    -- Cliffs have a collision box per orientation that the prototype does not
-    -- expose, so their margin gets a generous floor. A margin that is too
-    -- large only widens the ring; one that is too small would break the split.
-    cliff = { filter = { type = "cliff" }, margin = math.max(get_margin("cliff"), 4) },
-    item = { filter = { type = "item-entity" }, margin = get_margin("item-entity") },
+-- Everything about debris that follows from the prototypes alone.
+local function get_debris()
+  if debris then return debris end
+  debris = {
+    -- Trees and rocks: robots can always remove them.
+    plain_names = {},
+    -- Cliff name -> name of the item that destroys it.
+    cliff_explosives = {},
+    item_names = {},
+    all_names = {},
+    -- Upper bound for the distance between the position of a piece of debris
+    -- and any point of its collision box. Cliffs have a collision box per
+    -- orientation that the prototype does not expose, hence the generous
+    -- floor. A margin that is too large only makes fewer searches cheap; one
+    -- that is too small would let debris outside the range slip in.
+    margin = 4,
   }
-  -- An empty name filter would match everything.
-  if #debris_kinds.rock.filter.name == 0 then debris_kinds.rock = nil end
-  return debris_kinds
+  local function add(type, names, check)
+    for name, prototype in pairs(prototypes.get_entity_filtered({ { filter = "type", type = type } })) do
+      if not check or check(prototype) then
+        if names then names[#names + 1] = name end
+        debris.all_names[#debris.all_names + 1] = name
+        local box = prototype.collision_box
+        -- Boxes can be rotated, so allow for their diagonal.
+        local extent = math.max(-box.left_top.x, -box.left_top.y, box.right_bottom.x, box.right_bottom.y) * 1.5 + 0.1
+        debris.margin = math.max(debris.margin, extent)
+      end
+    end
+  end
+  add("tree", debris.plain_names)
+  -- Rocks share the "simple-entity" type with other entities, so they are
+  -- identified by the same prototype flag the deconstruction planner uses.
+  add("simple-entity", debris.plain_names, function(prototype)
+    return prototype.count_as_rock_for_filtered_deconstruction
+  end)
+  add("item-entity", debris.item_names)
+  add("cliff")
+  for name, prototype in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "cliff" } })) do
+    debris.cliff_explosives[name] = prototype.cliff_explosive_prototype
+  end
+  return debris
 end
 
 local function get_construction_range(roboport)
@@ -86,106 +77,57 @@ local function to_area(range)
   return { { range.left, range.top }, { range.right, range.bottom } }
 end
 
+-- Area searches match every entity whose collision box touches the area,
+-- which includes debris that sits outside the construction range and merely
+-- overlaps its edge. Debris is in range only when its position is.
 local function contains(range, position)
   return position.x >= range.left and position.x < range.right
     and position.y >= range.top and position.y < range.bottom
 end
 
-local function overlaps(range, box)
-  return box.left_top.x < range.right and box.right_bottom.x > range.left
-    and box.left_top.y < range.bottom and box.right_bottom.y > range.top
-end
-
--- The inner part of the range and the strips of the ring around it. Ranges
--- too small for an inner part consist of a single strip.
-local function split_range(range, margin)
+-- The range shrunk by the debris margin: whatever touches it is certainly in
+-- range. Nil for ranges too small to have such a part.
+local function get_inner_range(range)
+  local margin = get_debris().margin
   local inner = {
     left = range.left + margin,
     top = range.top + margin,
     right = range.right - margin,
     bottom = range.bottom - margin,
   }
-  if inner.left >= inner.right or inner.top >= inner.bottom then return nil, { range } end
-  return inner, {
-    { left = range.left, top = range.top, right = range.right, bottom = inner.top },
-    { left = range.left, top = inner.bottom, right = range.right, bottom = range.bottom },
-    { left = range.left, top = inner.top, right = inner.left, bottom = inner.bottom },
-    { left = inner.right, top = inner.top, right = range.right, bottom = inner.bottom },
-  }
+  if inner.left < inner.right and inner.top < inner.bottom then return inner end
 end
 
--- Entities in the ring that are in range and not already covered by a search
--- of the inner part. Entities touching several strips are returned once.
-local function find_in_ring(surface, filter, range, inner, strips)
-  local entities = {}
+-- A single count covers the whole range; the debris that only overlaps the
+-- edge from outside is then found along the four edges and taken off again.
+local function count_debris(roboport)
+  local surface = roboport.surface
+  local range = get_construction_range(roboport)
+  local names = get_debris().all_names
+  if #names == 0 then return 0 end
+  local count = surface.count_entities_filtered({ area = to_area(range), name = names })
+
+  local edges = {
+    { left = range.left, top = range.top, right = range.left + EDGE, bottom = range.bottom },
+    { left = range.right - EDGE, top = range.top, right = range.right, bottom = range.bottom },
+    { left = range.left, top = range.top, right = range.right, bottom = range.top + EDGE },
+    { left = range.left, top = range.bottom - EDGE, right = range.right, bottom = range.bottom },
+  }
+  -- Debris at a corner touches two edges but must be taken off only once.
   local seen = {}
-  filter.limit = nil
-  for _, strip in pairs(strips) do
-    filter.area = to_area(strip)
-    for _, entity in pairs(surface.find_entities_filtered(filter)) do
+  for _, edge in pairs(edges) do
+    for _, entity in pairs(surface.find_entities_filtered({ area = to_area(edge), name = names })) do
       local position = entity.position
-      if contains(range, position) and not (inner and overlaps(inner, entity.bounding_box)) then
+      if not contains(range, position) then
         local key = entity.name .. "/" .. position.x .. "/" .. position.y
         if not seen[key] then
           seen[key] = true
-          entities[#entities + 1] = entity
+          count = count - 1
         end
       end
     end
   end
-  return entities
-end
-
--- Counts the entities of the group in range; stops early once `limit` is reached.
-local function count_in_range(surface, group, range, limit)
-  local inner, strips = split_range(range, group.margin)
-  local count = 0
-  if inner then
-    group.filter.area = to_area(inner)
-    group.filter.limit = limit
-    count = surface.count_entities_filtered(group.filter)
-    if limit and count >= limit then return count end
-  end
-  return count + #find_in_ring(surface, group.filter, range, inner, strips)
-end
-
--- Finds the entities of the group in range; stops early once `limit` are found.
-local function find_in_range(surface, group, range, limit)
-  local inner, strips = split_range(range, group.margin)
-  local entities = {}
-  if inner then
-    group.filter.area = to_area(inner)
-    group.filter.limit = limit
-    entities = surface.find_entities_filtered(group.filter)
-    if limit and #entities >= limit then return entities end
-  end
-  for _, entity in pairs(find_in_ring(surface, group.filter, range, inner, strips)) do
-    entities[#entities + 1] = entity
-  end
-  return entities
-end
-
-local function count_debris(roboport)
-  local surface = roboport.surface
-  local range = get_construction_range(roboport)
-  local count = 0
-  for _, kind in pairs(get_debris_kinds()) do
-    local group = { filter = { type = kind.filter.type, name = kind.filter.name }, margin = kind.margin }
-    count = count + count_in_range(surface, group, range)
-  end
   return count
-end
-
-local cliff_explosives
-
--- Cliff name -> name of the item that destroys it.
-local function get_cliff_explosives()
-  if cliff_explosives then return cliff_explosives end
-  cliff_explosives = {}
-  for name, prototype in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "cliff" } })) do
-    cliff_explosives[name] = prototype.cliff_explosive_prototype
-  end
-  return cliff_explosives
 end
 
 local function network_has_item(network, item)
@@ -195,23 +137,50 @@ local function network_has_item(network, item)
   return false
 end
 
--- Cliffs can only be removed while the network holds their explosives.
-local function get_removable_cliff_names(network)
-  local names = {}
-  local available = {}
-  for cliff, explosive in pairs(get_cliff_explosives()) do
-    if available[explosive] == nil then available[explosive] = network_has_item(network, explosive) end
-    if available[explosive] then names[#names + 1] = cliff end
+local search_names = {}
+
+-- The names a roboport searches for: `pieces` are trees, rocks and the cliffs
+-- its network holds explosives for; `all` adds the items on the ground when
+-- there is a network that could store them. Debris its robots cannot remove
+-- is left out, so it is neither marked nor counted toward the limit. The
+-- lists are kept per combination, as building them for every visit would
+-- cost more than the searches.
+local function get_search_names(network)
+  local cliffs = {}
+  if network then
+    local available = {}
+    for cliff, explosive in pairs(get_debris().cliff_explosives) do
+      if available[explosive] == nil then available[explosive] = network_has_item(network, explosive) end
+      if available[explosive] then cliffs[#cliffs + 1] = cliff end
+    end
   end
+
+  local key = (network and "network/" or "none/") .. table.concat(cliffs, "/")
+  local names = search_names[key]
+  if names then return names end
+
+  names = { pieces = {}, all = {} }
+  for _, name in pairs(get_debris().plain_names) do names.pieces[#names.pieces + 1] = name end
+  for _, name in pairs(cliffs) do names.pieces[#names.pieces + 1] = name end
+  for _, name in pairs(names.pieces) do names.all[#names.all + 1] = name end
+  if network then
+    for _, name in pairs(get_debris().item_names) do names.all[#names.all + 1] = name end
+  end
+  search_names[key] = names
   return names
 end
 
 -- Items on the ground can only be removed while the network has storage
 -- space for them. The answer is remembered per kind of item, so a visit asks
 -- the network once per kind instead of once per entity.
+local function always()
+  return true
+end
+
 local function get_item_check(network)
   local removable = {}
   return function(entity)
+    if entity.type ~= "item-entity" then return true end
     local stack = entity.stack
     local key = stack.name .. "/" .. stack.quality.name
     if removable[key] == nil then
@@ -221,81 +190,94 @@ local function get_item_check(network)
   end
 end
 
--- The debris a roboport may mark, as groups of a search filter, the margin of
--- their kind and an optional per-entity check. Debris its robots cannot
--- remove is left out, so it is neither marked nor counted toward the limit.
--- Items come last: they are the only group that may need a look at every
--- entity.
-local function get_marking_groups(roboport)
-  local kinds = get_debris_kinds()
-  local groups = { { filter = { type = "tree" }, margin = kinds.tree.margin } }
-  if kinds.rock then
-    groups[#groups + 1] = { filter = { name = kinds.rock.filter.name }, margin = kinds.rock.margin }
-  end
-  local network = roboport.logistic_network
-  if network then
-    local cliffs = get_removable_cliff_names(network)
-    if #cliffs > 0 then
-      groups[#groups + 1] = { filter = { name = cliffs }, margin = kinds.cliff.margin }
+-- Counts the marked debris that occupies the roboport's limit, up to `limit`.
+-- Marked debris is normally rare, so it is fetched in one search and checked
+-- piece by piece. The search stops a bit beyond the limit; only when that was
+-- not enough to tell (many marked pieces that do not count) all are fetched.
+local function count_marked(surface, range, names, is_removable, limit)
+  local filter = { area = to_area(range), name = names, to_be_deconstructed = true, limit = limit + MARKED_SLACK }
+  local entities = surface.find_entities_filtered(filter)
+  local function count()
+    local marked = 0
+    for _, entity in pairs(entities) do
+      if contains(range, entity.position) and is_removable(entity) then
+        marked = marked + 1
+        if marked == limit then break end
+      end
     end
-    groups[#groups + 1] = {
-      filter = { type = "item-entity" },
-      margin = kinds.item.margin,
-      is_removable = get_item_check(network),
-    }
+    return marked
   end
-  return groups
+  local marked = count()
+  if marked < limit and #entities == filter.limit then
+    filter.limit = nil
+    entities = surface.find_entities_filtered(filter)
+    marked = count()
+  end
+  return marked
 end
 
--- Marks up to `remaining` unmarked entities of the group, looking at no more
--- than about `limit` of them. Returns what is left to mark and whether any
--- entity was passed over.
-local function mark_group(roboport, range, group, remaining, limit)
-  local skipped = false
-  for _, entity in pairs(find_in_range(roboport.surface, group, range, limit)) do
-    if (not group.is_removable or group.is_removable(entity)) and entity.order_deconstruction(roboport.force) then
-      remaining = remaining - 1
-      if remaining == 0 then break end
-    else
-      skipped = true
+-- Marks up to `remaining` unmarked entities matching the filter and returns
+-- what is left to mark. The inner part of the range is searched first: no
+-- more entities than needed are fetched there, which keeps a visit cheap even
+-- when the range is full of trees. Only when that was not enough (little
+-- debris left, or entities were passed over because they are unremovable or
+-- refuse the order, e.g. not minable) the whole range is searched.
+local function mark(roboport, range, filter, is_removable, remaining)
+  local surface = roboport.surface
+  local force = roboport.force
+  filter.to_be_deconstructed = false
+
+  local inner = get_inner_range(range)
+  if inner then
+    filter.area = to_area(inner)
+    filter.limit = remaining
+    for _, entity in pairs(surface.find_entities_filtered(filter)) do
+      if is_removable(entity) and entity.order_deconstruction(force) then
+        remaining = remaining - 1
+        if remaining == 0 then return 0 end
+      end
     end
   end
-  return remaining, skipped
+
+  filter.area = to_area(range)
+  filter.limit = nil
+  for _, entity in pairs(surface.find_entities_filtered(filter)) do
+    if contains(range, entity.position) and is_removable(entity) and entity.order_deconstruction(force) then
+      remaining = remaining - 1
+      if remaining == 0 then return 0 end
+    end
+  end
+  return remaining
 end
 
 -- Marks unmarked debris until the map setting's limit of marked debris in
--- range is reached. Searches stop as soon as they have enough matches, so a
--- visit stays cheap even when the range is full of trees; which pieces get
--- marked does not matter.
+-- range is reached; which pieces get marked does not matter. Most visits find
+-- nothing to do, so those are kept cheapest.
 local function mark_next_debris(roboport)
-  local remaining = settings.global[MAX_MARKED_SETTING].value
-  if remaining == 0 then return end
+  local limit = settings.global[MAX_MARKED_SETTING].value
+  if limit == 0 then return end
 
   local surface = roboport.surface
   local range = get_construction_range(roboport)
-  local groups = get_marking_groups(roboport)
-  for _, group in pairs(groups) do
-    group.filter.to_be_deconstructed = true
-    if group.is_removable then
-      for _, entity in pairs(find_in_range(surface, group, range)) do
-        if group.is_removable(entity) then remaining = remaining - 1 end
-      end
-    else
-      remaining = remaining - count_in_range(surface, group, range, remaining)
-    end
-    if remaining <= 0 then return end
-  end
+  local area = to_area(range)
+  local all_names = get_debris().all_names
+  if #all_names == 0 or surface.count_entities_filtered({ area = area, name = all_names, limit = 1 }) == 0 then return end
 
-  for _, group in pairs(groups) do
-    group.filter.to_be_deconstructed = false
-    local skipped
-    remaining, skipped = mark_group(roboport, range, group, remaining, remaining)
-    -- Some entities were passed over (unremovable, or they refuse the order,
-    -- e.g. not minable); only then look at all of the group.
-    if remaining > 0 and skipped then
-      remaining = mark_group(roboport, range, group, remaining, nil)
-    end
-    if remaining == 0 then return end
+  local network = roboport.logistic_network
+  local names = get_search_names(network)
+  if #names.all == 0 or surface.count_entities_filtered({ area = area, name = names.all, limit = 1 }) == 0 then return end
+
+  local is_removable = network and get_item_check(network) or always
+  local remaining = limit - count_marked(surface, range, names.all, is_removable, limit)
+  if remaining <= 0 then return end
+
+  -- Items come last: they are the only debris that may need a look at every
+  -- piece in range.
+  if #names.pieces > 0 then
+    remaining = mark(roboport, range, { name = names.pieces }, always, remaining)
+  end
+  if remaining > 0 and network and #get_debris().item_names > 0 then
+    mark(roboport, range, { name = get_debris().item_names }, is_removable, remaining)
   end
 end
 
@@ -348,6 +330,7 @@ end
 local function rebuild_roboports()
   storage.roboports = {}
   storage.next_roboport = 1
+  storage.visit_credit = 0
   for _, surface in pairs(game.surfaces) do
     for _, entity in pairs(surface.find_entities_filtered({ type = "roboport" })) do
       register_roboport(entity)
@@ -370,23 +353,25 @@ script.on_event(defines.events.script_raised_built, on_built, roboport_filter)
 script.on_event(defines.events.script_raised_revive, on_built, roboport_filter)
 script.on_event(defines.events.on_entity_cloned, on_built, roboport_filter)
 
-script.on_nth_tick(VISIT_INTERVAL, function()
+script.on_event(defines.events.on_tick, function()
   if not storage.roboports then rebuild_roboports() end
   local roboports = storage.roboports
-  local visits = math.ceil(#roboports * VISIT_INTERVAL / VISIT_PERIOD)
-  for _ = 1, visits do
-    if #roboports == 0 then return end
-    if storage.next_roboport > #roboports then storage.next_roboport = 1 end
-    local roboport = roboports[storage.next_roboport]
-    if is_roboport(roboport) then
-      mark_next_debris(roboport)
-      storage.next_roboport = storage.next_roboport + 1
-    elseif roboport.valid then
-      storage.next_roboport = storage.next_roboport + 1
-    else
-      -- Removed roboport: the last entry takes its place and is visited next.
-      roboports[storage.next_roboport] = roboports[#roboports]
-      roboports[#roboports] = nil
-    end
+  if #roboports == 0 then return end
+
+  -- Each tick earns the share of a visit that lets all roboports be visited
+  -- once per VISIT_PERIOD, but never more than the one visit a tick may make.
+  storage.visit_credit = math.min((storage.visit_credit or 0) + #roboports / VISIT_PERIOD, 1)
+  if storage.visit_credit < 1 then return end
+  storage.visit_credit = storage.visit_credit - 1
+
+  if storage.next_roboport > #roboports then storage.next_roboport = 1 end
+  local roboport = roboports[storage.next_roboport]
+  if roboport.valid then
+    if is_roboport(roboport) then mark_next_debris(roboport) end
+    storage.next_roboport = storage.next_roboport + 1
+  else
+    -- Removed roboport: the last entry takes its place and is visited next.
+    roboports[storage.next_roboport] = roboports[#roboports]
+    roboports[#roboports] = nil
   end
 end)
