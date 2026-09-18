@@ -102,9 +102,21 @@ jobs:
           cat "$log"
 
           # Factorio does not always exit with an error when a mod fails, so the log decides as well.
-          errors=$(grep -E '^ *[0-9]+\.[0-9]+ Error |non-recoverable error|^Error' "$log" || true)
+          errors=$(grep -A 8 -E '^ *[0-9]+\.[0-9]+ Error |^Error' "$log" | head -n 30 || true)
           if [ "$status" -ne 0 ] || [ -n "$errors" ]; then
-            echo "::error::Factorio reported a problem while loading or running the mod (exit code $status): $(echo "$errors" | head -n 5 | tr '\n' ' ')"
+            # Point the report at the mod's file and line when the log names one.
+            name=$(jq -r '.name' info.json)
+            location=$(echo "$errors" | grep -o "__${name}__/[^:]*:[0-9]*" | head -n 1 || true)
+            target=""
+            if [ -n "$location" ]; then
+              file=${location#__${name}__/}
+              target=" file=${file%%:*},line=${file##*:}"
+            fi
+            message="Factorio reported a problem while loading or running the mod (exit code $status):"$'\n'"$errors"
+            # Workflow commands take multi-line messages in this encoding.
+            message=${message//'%'/'%25'}
+            message=${message//$'\n'/'%0A'}
+            echo "::error${target}::${message}"
             exit 1
           fi
           if ! grep -q 'ci-harness: .* marked' "$log"; then
