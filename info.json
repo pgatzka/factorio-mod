@@ -1,0 +1,9 @@
+{
+  "name": "factorio-mod",
+  "version": "0.1.0",
+  "title": "Factorio Mod (placeholder)",
+  "author": "Philipp Gatzka",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0"],
+  "description": "Placeholder mod without gameplay changes. Name and theme are not decided yet."
+}
