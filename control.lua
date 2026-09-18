@@ -1,6 +1,8 @@
 -- Shows the amount of debris inside a roboport's construction range
 -- in the roboport's info panel while a player hovers over it, and lets
--- roboports mark that debris for deconstruction one piece at a time.
+-- roboports mark that debris for deconstruction, limited by a map setting.
+
+local MAX_MARKED_SETTING = "factorio-mod-max-marked-debris"
 
 -- Roboports are visited round-robin; the batch size is chosen so that every
 -- roboport is visited about once per VISIT_PERIOD ticks.
@@ -52,29 +54,45 @@ local function count_debris(roboport)
   return count
 end
 
--- Marks one unmarked piece of debris, unless debris in range is already marked.
--- Searches stop at the first match, so a visit stays cheap even when the
--- range is full of trees; which piece gets marked does not matter.
+-- Marks unmarked debris until the map setting's limit of marked debris in
+-- range is reached. Searches stop as soon as they have enough matches, so a
+-- visit stays cheap even when the range is full of trees; which pieces get
+-- marked does not matter.
 local function mark_next_debris(roboport)
+  local remaining = settings.global[MAX_MARKED_SETTING].value
+  if remaining == 0 then return end
+
   local surface = roboport.surface
   for _, filter in pairs(get_debris_filters(roboport, true)) do
-    filter.limit = 1
-    if surface.count_entities_filtered(filter) > 0 then return end
+    filter.limit = remaining
+    remaining = remaining - surface.count_entities_filtered(filter)
+    if remaining <= 0 then return end
   end
 
   local force = roboport.force
   local filters = get_debris_filters(roboport, false)
+  local refused = false
   for _, filter in pairs(filters) do
-    filter.limit = 1
-    local entity = surface.find_entities_filtered(filter)[1]
-    if entity and entity.order_deconstruction(force) then return end
+    filter.limit = remaining
+    for _, entity in pairs(surface.find_entities_filtered(filter)) do
+      if entity.order_deconstruction(force) then
+        remaining = remaining - 1
+        if remaining == 0 then return end
+      else
+        refused = true
+      end
+    end
   end
+  if not refused then return end
 
   -- Some entities refuse the order (e.g. not minable); only then look at all of them.
   for _, filter in pairs(filters) do
     filter.limit = nil
     for _, entity in pairs(surface.find_entities_filtered(filter)) do
-      if entity.order_deconstruction(force) then return end
+      if entity.order_deconstruction(force) then
+        remaining = remaining - 1
+        if remaining == 0 then return end
+      end
     end
   end
 end
