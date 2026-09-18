@@ -1,6 +1,10 @@
 # factorio-mod
 
-Placeholder Factorio 2.0 mod. It loads without Space Age and changes no gameplay yet; name and theme are not decided.
+Factorio 2.0 mod that loads without Space Age; name and theme are not decided.
+
+## Features
+
+- Hovering over a roboport shows the amount of debris (items on the ground, trees, rocks, cliffs) inside its construction range in the info panel.
 
 ## Local development
 
