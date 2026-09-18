@@ -1,0 +1,125 @@
+name: Mod checks
+run-name: |
+  ${{ github.workflow }}: ${{ github.event_name }} for ${{ github.ref_name }} by @${{ github.actor }}
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check info.json
+        run: |
+          jq -e '
+            (.name | type == "string" and test("^[A-Za-z0-9_-]+$")) and
+            (.version | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+            (.title | type == "string") and
+            (.author | type == "string") and
+            (.factorio_version | type == "string")
+          ' info.json > /dev/null || {
+            echo "::error file=info.json::info.json is not valid JSON or lacks a valid name, version, title, author, or factorio_version"
+            exit 1
+          }
+
+      - name: Check Lua syntax
+        run: |
+          sudo apt-get install --yes --no-install-recommends lua5.2 > /dev/null
+          failed=0
+          while IFS= read -r file; do
+            if ! output=$(luac5.2 -p "$file" 2>&1); then
+              # luac reports "luac5.2: <file>:<line>: <message>"
+              line=$(echo "$output" | sed -n 's/^[^:]*: [^:]*:\([0-9]*\):.*/\1/p' | head -n 1)
+              echo "::error file=$file,line=${line:-1}::$output"
+              failed=1
+            fi
+          done < <(git ls-files '*.lua')
+          exit $failed
+
+      - name: Resolve Factorio version
+        id: factorio
+        run: |
+          version=$(curl --fail --silent --show-error https://factorio.com/api/latest-releases | jq -r '.stable.headless')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Factorio from cache
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/factorio
+          key: factorio-headless-${{ steps.factorio.outputs.version }}
+
+      - name: Download Factorio
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://factorio.com/get-download/${{ steps.factorio.outputs.version }}/headless/linux64" \
+            --output "$RUNNER_TEMP/factorio.tar.xz"
+          tar --extract --file "$RUNNER_TEMP/factorio.tar.xz" --directory "$RUNNER_TEMP"
+
+      - name: Set up mods
+        run: |
+          name=$(jq -r '.name' info.json)
+          mods="$RUNNER_TEMP/mods"
+          mkdir -p "$mods/$name" "$mods/ci-harness"
+          git archive HEAD | tar --extract --directory "$mods/$name"
+          cp .github/ci/harness/* "$mods/ci-harness/"
+          # Expansion mods stay off: the mod has to load with the base game alone.
+          jq -n --arg name "$name" '{mods: [
+            {name: "base", enabled: true},
+            {name: "elevated-rails", enabled: false},
+            {name: "quality", enabled: false},
+            {name: "space-age", enabled: false},
+            {name: $name, enabled: true},
+            {name: "ci-harness", enabled: true}
+          ]}' > "$mods/mod-list.json"
+
+      # Creating a map loads the settings and data stage of all mods and runs
+      # on_init; the benchmark then runs the scripts for a while. The harness
+      # mod provides a roboport with debris and fails when nothing got marked.
+      - name: Load the mod and run its scripts
+        run: |
+          factorio="$RUNNER_TEMP/factorio/bin/x64/factorio"
+          mods="$RUNNER_TEMP/mods"
+          log="$RUNNER_TEMP/factorio.log"
+          status=0
+          {
+            "$factorio" --mod-directory "$mods" --create "$RUNNER_TEMP/check.zip" &&
+            "$factorio" --mod-directory "$mods" --benchmark "$RUNNER_TEMP/check.zip" --benchmark-ticks 900
+          } > "$log" 2>&1 || status=$?
+          cat "$log"
+
+          # Factorio does not always exit with an error when a mod fails, so the log decides as well.
+          errors=$(grep -A 8 -E '^ *[0-9]+\.[0-9]+ Error |^Error' "$log" | head -n 30 || true)
+          if [ "$status" -ne 0 ] || [ -n "$errors" ]; then
+            # Point the report at the mod's file and line when the log names one.
+            name=$(jq -r '.name' info.json)
+            location=$(echo "$errors" | grep -o "__${name}__/[^:]*:[0-9]*" | head -n 1 || true)
+            target=""
+            if [ -n "$location" ]; then
+              file=${location#__${name}__/}
+              target=" file=${file%%:*},line=${file##*:}"
+            fi
+            message="Factorio reported a problem while loading or running the mod (exit code $status):"$'\n'"$errors"
+            # Workflow commands take multi-line messages in this encoding.
+            message=${message//'%'/'%25'}
+            message=${message//$'\n'/'%0A'}
+            echo "::error${target}::${message}"
+            exit 1
+          fi
+          if ! grep -q 'ci-harness: .* marked' "$log"; then
+            echo "::error::The scripts did not run to the point where the harness verifies the marked debris."
+            exit 1
+          fi
