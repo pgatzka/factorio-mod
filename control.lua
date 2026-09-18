@@ -43,37 +43,39 @@ local function get_debris_filters(roboport, to_be_deconstructed)
   return filters
 end
 
-local function count_debris(roboport, to_be_deconstructed)
+local function count_debris(roboport)
   local surface = roboport.surface
   local count = 0
-  for _, filter in pairs(get_debris_filters(roboport, to_be_deconstructed)) do
+  for _, filter in pairs(get_debris_filters(roboport)) do
     count = count + surface.count_entities_filtered(filter)
   end
   return count
 end
 
-local function distance_squared(a, b)
-  local dx, dy = a.x - b.x, a.y - b.y
-  return dx * dx + dy * dy
-end
-
--- Marks the closest unmarked debris, unless debris in range is already marked.
+-- Marks one unmarked piece of debris, unless debris in range is already marked.
+-- Searches stop at the first match, so a visit stays cheap even when the
+-- range is full of trees; which piece gets marked does not matter.
 local function mark_next_debris(roboport)
-  if count_debris(roboport, true) > 0 then return end
-
   local surface = roboport.surface
-  local position = roboport.position
-  local candidates = {}
-  for _, filter in pairs(get_debris_filters(roboport, false)) do
-    for _, entity in pairs(surface.find_entities_filtered(filter)) do
-      candidates[#candidates + 1] = { entity = entity, distance = distance_squared(entity.position, position) }
-    end
+  for _, filter in pairs(get_debris_filters(roboport, true)) do
+    filter.limit = 1
+    if surface.count_entities_filtered(filter) > 0 then return end
   end
-  table.sort(candidates, function(a, b) return a.distance < b.distance end)
 
-  -- Some entities refuse the order (e.g. not minable), so fall through to the next closest.
-  for _, candidate in pairs(candidates) do
-    if candidate.entity.order_deconstruction(roboport.force) then return end
+  local force = roboport.force
+  local filters = get_debris_filters(roboport, false)
+  for _, filter in pairs(filters) do
+    filter.limit = 1
+    local entity = surface.find_entities_filtered(filter)[1]
+    if entity and entity.order_deconstruction(force) then return end
+  end
+
+  -- Some entities refuse the order (e.g. not minable); only then look at all of them.
+  for _, filter in pairs(filters) do
+    filter.limit = nil
+    for _, entity in pairs(surface.find_entities_filtered(filter)) do
+      if entity.order_deconstruction(force) then return end
+    end
   end
 end
 
