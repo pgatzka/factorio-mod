@@ -5,7 +5,7 @@ Factorio 2.0 mod that loads without Space Age; name and theme are not decided.
 ## Features
 
 - Hovering over a roboport shows the amount of debris (items on the ground, trees, rocks, cliffs) inside its construction range in the info panel.
-- Roboports clear that debris on their own: each marks one piece inside its own construction range for deconstruction and waits until no debris in its range is marked before marking the next one.
+- Roboports clear that debris on their own: each marks debris inside its own construction range for deconstruction, keeping at most a configurable number of pieces marked at once. The map setting "Maximum marked debris per roboport" defaults to 1; 0 turns automatic marking off.
 
 ## Local development
 
