@@ -25,33 +25,108 @@ local function get_rock_names()
   return rock_names
 end
 
--- Search filters matching the debris in the roboport's construction range.
--- to_be_deconstructed limits them to marked (true) or unmarked (false)
--- debris; nil matches both.
-local function get_debris_filters(roboport, to_be_deconstructed)
+local function get_construction_area(roboport)
   local radius = roboport.logistic_cell.construction_radius
   local position = roboport.position
-  local area = {
+  return {
     { position.x - radius, position.y - radius },
     { position.x + radius, position.y + radius },
   }
-  local filters = {
-    { area = area, type = { "item-entity", "tree", "cliff" }, to_be_deconstructed = to_be_deconstructed },
-  }
-  local rocks = get_rock_names()
-  if #rocks > 0 then
-    filters[#filters + 1] = { area = area, name = rocks, to_be_deconstructed = to_be_deconstructed }
-  end
-  return filters
 end
 
 local function count_debris(roboport)
+  local area = get_construction_area(roboport)
   local surface = roboport.surface
-  local count = 0
-  for _, filter in pairs(get_debris_filters(roboport)) do
-    count = count + surface.count_entities_filtered(filter)
+  local count = surface.count_entities_filtered({ area = area, type = { "item-entity", "tree", "cliff" } })
+  local rocks = get_rock_names()
+  if #rocks > 0 then
+    count = count + surface.count_entities_filtered({ area = area, name = rocks })
   end
   return count
+end
+
+local cliff_explosives
+
+-- Cliff name -> name of the item that destroys it.
+local function get_cliff_explosives()
+  if cliff_explosives then return cliff_explosives end
+  cliff_explosives = {}
+  for name, prototype in pairs(prototypes.get_entity_filtered({ { filter = "type", type = "cliff" } })) do
+    cliff_explosives[name] = prototype.cliff_explosive_prototype
+  end
+  return cliff_explosives
+end
+
+local function network_has_item(network, item)
+  for quality in pairs(prototypes.quality) do
+    if network.get_item_count({ name = item, quality = quality }) > 0 then return true end
+  end
+  return false
+end
+
+-- Cliffs can only be removed while the network holds their explosives.
+local function get_removable_cliff_names(network)
+  local names = {}
+  local available = {}
+  for cliff, explosive in pairs(get_cliff_explosives()) do
+    if available[explosive] == nil then available[explosive] = network_has_item(network, explosive) end
+    if available[explosive] then names[#names + 1] = cliff end
+  end
+  return names
+end
+
+-- Items on the ground can only be removed while the network has storage
+-- space for them. The answer is remembered per kind of item, so a visit asks
+-- the network once per kind instead of once per entity.
+local function get_item_check(network)
+  local removable = {}
+  return function(entity)
+    local stack = entity.stack
+    local key = stack.name .. "/" .. stack.quality.name
+    if removable[key] == nil then
+      removable[key] = network.select_drop_point({ stack = stack }) ~= nil
+    end
+    return removable[key]
+  end
+end
+
+-- The debris a roboport may mark, as groups of a search filter and an
+-- optional per-entity check. Debris its robots cannot remove is left out, so
+-- it is neither marked nor counted toward the limit. Items come last: they
+-- are the only group that may need a look at every entity.
+local function get_marking_groups(roboport)
+  local area = get_construction_area(roboport)
+  local groups = { { filter = { area = area, type = "tree" } } }
+  local rocks = get_rock_names()
+  if #rocks > 0 then
+    groups[#groups + 1] = { filter = { area = area, name = rocks } }
+  end
+  local network = roboport.logistic_network
+  if network then
+    local cliffs = get_removable_cliff_names(network)
+    if #cliffs > 0 then
+      groups[#groups + 1] = { filter = { area = area, name = cliffs } }
+    end
+    groups[#groups + 1] = { filter = { area = area, type = "item-entity" }, is_removable = get_item_check(network) }
+  end
+  return groups
+end
+
+-- Marks up to `remaining` unmarked entities of the group, looking at no more
+-- than `limit` of them. Returns what is left to mark and whether any entity
+-- was passed over.
+local function mark_group(roboport, group, remaining, limit)
+  group.filter.limit = limit
+  local skipped = false
+  for _, entity in pairs(roboport.surface.find_entities_filtered(group.filter)) do
+    if (not group.is_removable or group.is_removable(entity)) and entity.order_deconstruction(roboport.force) then
+      remaining = remaining - 1
+      if remaining == 0 then break end
+    else
+      skipped = true
+    end
+  end
+  return remaining, skipped
 end
 
 -- Marks unmarked debris until the map setting's limit of marked debris in
@@ -63,37 +138,31 @@ local function mark_next_debris(roboport)
   if remaining == 0 then return end
 
   local surface = roboport.surface
-  for _, filter in pairs(get_debris_filters(roboport, true)) do
-    filter.limit = remaining
-    remaining = remaining - surface.count_entities_filtered(filter)
+  local groups = get_marking_groups(roboport)
+  for _, group in pairs(groups) do
+    local filter = group.filter
+    filter.to_be_deconstructed = true
+    if group.is_removable then
+      for _, entity in pairs(surface.find_entities_filtered(filter)) do
+        if group.is_removable(entity) then remaining = remaining - 1 end
+      end
+    else
+      filter.limit = remaining
+      remaining = remaining - surface.count_entities_filtered(filter)
+    end
     if remaining <= 0 then return end
   end
 
-  local force = roboport.force
-  local filters = get_debris_filters(roboport, false)
-  local refused = false
-  for _, filter in pairs(filters) do
-    filter.limit = remaining
-    for _, entity in pairs(surface.find_entities_filtered(filter)) do
-      if entity.order_deconstruction(force) then
-        remaining = remaining - 1
-        if remaining == 0 then return end
-      else
-        refused = true
-      end
+  for _, group in pairs(groups) do
+    group.filter.to_be_deconstructed = false
+    local skipped
+    remaining, skipped = mark_group(roboport, group, remaining, remaining)
+    -- Some entities were passed over (unremovable, or they refuse the order,
+    -- e.g. not minable); only then look at all of the group.
+    if remaining > 0 and skipped then
+      remaining = mark_group(roboport, group, remaining, nil)
     end
-  end
-  if not refused then return end
-
-  -- Some entities refuse the order (e.g. not minable); only then look at all of them.
-  for _, filter in pairs(filters) do
-    filter.limit = nil
-    for _, entity in pairs(surface.find_entities_filtered(filter)) do
-      if entity.order_deconstruction(force) then
-        remaining = remaining - 1
-        if remaining == 0 then return end
-      end
-    end
+    if remaining == 0 then return end
   end
 end
 
