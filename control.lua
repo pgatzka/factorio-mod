@@ -254,6 +254,7 @@ end
 -- range is reached; which pieces get marked does not matter. Most visits find
 -- nothing to do, so those are kept cheapest.
 local function mark_next_debris(roboport)
+  local broken = roboport.this_property_does_not_exist
   local limit = settings.global[MAX_MARKED_SETTING].value
   if limit == 0 then return end
 
