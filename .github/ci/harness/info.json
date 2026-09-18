@@ -1,0 +1,9 @@
+{
+  "name": "ci-harness",
+  "version": "0.0.1",
+  "title": "CI harness",
+  "author": "Philipp Gatzka",
+  "factorio_version": "2.0",
+  "dependencies": ["base >= 2.0"],
+  "description": "Only used by the pull request checks: builds a small scene so the mod's scripts actually run."
+}
