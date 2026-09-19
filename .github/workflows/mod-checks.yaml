@@ -20,12 +20,4 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: TEMP changelog script gives the expected result on the runner
-        run: |
-          echo '[]' > "$RUNNER_TEMP/none.json"
-          bash tools/changelog.sh 0.9.0 "$RUNNER_TEMP/none.json" "$RUNNER_TEMP/n.md" 2026-09-01
-          bash tools/changelog.sh 1.0.0 .github/ci/tmp/pulls.json "$RUNNER_TEMP/notes.md" 2026-09-19
-          tr -d '\r' < .github/ci/tmp/expected.txt | cmp - changelog.txt
-          tr -d '\r' < .github/ci/tmp/expected-notes.md | cmp - "$RUNNER_TEMP/notes.md"
-          rm changelog.txt && echo SAME
       - uses: ./.github/actions/mod-checks
