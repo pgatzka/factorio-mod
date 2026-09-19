@@ -82,6 +82,6 @@ The changelog is written from the pull requests merged since the last release, o
 
 A release without any listed pull request gets the single entry "No player-facing changes." `changelog.txt` is never edited by hand.
 
-- The package contains only runtime files (`info.json`, `changelog.txt`, `thumbnail.png`, `LICENSE`, top-level `*.lua`, `locale/`, `migrations/`, `prototypes/`, `graphics/`). Extend `$runtimePatterns` in `tools/package.ps1`, the build step used by the workflows, when the mod gains other runtime folders.
+- The package contains only runtime files (`info.json`, `changelog.txt`, `thumbnail.png`, `LICENSE`, top-level `*.lua`, `locale/`, `migrations/`, `prototypes/`, `graphics/`). Extend `runtime_patterns` in `tools/package.sh`, the build step used by the workflows, when the mod gains other runtime folders.
 - Uploading the package to the mod portal is a manual step: download it from the GitHub release.
 - `main` only takes changes through pull requests. The workflow pushes the version commit as a GitHub App that is a bypass actor of that rule; it expects the app's ID in the repository variable `RELEASE_APP_ID` and its private key in the secret `RELEASE_APP_PRIVATE_KEY`.

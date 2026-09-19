@@ -110,7 +110,7 @@ runs:
         mods="$RUNNER_TEMP/mods"
         mkdir -p "$mods/ci-harness"
         # The mod is installed as its release package, so the package gets checked as well.
-        pwsh -File tools/package.ps1
+        bash tools/package.sh
         cp dist/*.zip "$mods/"
         cp .github/ci/harness/* "$mods/ci-harness/"
         # Expansion mods stay off: the mod has to load with the base game alone.

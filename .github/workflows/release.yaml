@@ -99,8 +99,7 @@ jobs:
             mv "$RUNNER_TEMP/pulls.tmp" "$RUNNER_TEMP/pulls.json"
           done < <(jq -c '.[]' "$RUNNER_TEMP/merged.json")
 
-          pwsh -File tools/changelog.ps1 -Version "$VERSION" \
-            -PullRequests "$RUNNER_TEMP/pulls.json" -NotesPath "$RUNNER_TEMP/release-notes.md"
+          bash tools/changelog.sh "$VERSION" "$RUNNER_TEMP/pulls.json" "$RUNNER_TEMP/release-notes.md"
 
       # The commit stays local until the checks have passed: a failing release
       # leaves neither a version change nor a tag behind.
