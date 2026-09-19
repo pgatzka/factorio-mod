@@ -281,13 +281,17 @@ local function mark_next_debris(roboport)
   end
 end
 
+local function is_fully_powered(roboport)
+  local status = roboport.status
+  return status == defines.entity_status.working or status == defines.entity_status.normal
+end
+
 -- The custom status replaces the regular status line, so the diode keeps
 -- reflecting the roboport's actual state.
 local function get_diode(roboport)
-  local status = roboport.status
-  if status == defines.entity_status.working or status == defines.entity_status.normal then
+  if is_fully_powered(roboport) then
     return defines.entity_status_diode.green
-  elseif status == defines.entity_status.low_power then
+  elseif roboport.status == defines.entity_status.low_power then
     return defines.entity_status_diode.yellow
   end
   return defines.entity_status_diode.red
@@ -367,7 +371,8 @@ script.on_event(defines.events.on_tick, function()
   if storage.next_roboport > #roboports then storage.next_roboport = 1 end
   local roboport = roboports[storage.next_roboport]
   if roboport.valid then
-    if is_roboport(roboport) then mark_next_debris(roboport) end
+    -- An underpowered roboport cannot run its robots properly, so it creates no work for them.
+    if is_roboport(roboport) and is_fully_powered(roboport) then mark_next_debris(roboport) end
     storage.next_roboport = storage.next_roboport + 1
   else
     -- Removed roboport: the last entry takes its place and is visited next.
