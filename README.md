@@ -24,19 +24,23 @@ Every push to a pull request runs the "Mod checks" workflow:
 
 - `info.json` is valid and has the fields Factorio requires.
 - All Lua files are syntactically correct.
-- The release package builds, loads in the current stable headless Factorio with the base game alone, and its scripts run without errors. A small harness mod (`.github/ci/harness`) builds a roboport with debris around it and fails the check when nothing gets marked.
+- The release package builds, loads in the current stable headless Factorio with the base game alone, and its scripts run without errors. A small harness mod (`.github/ci/harness`) builds a powered and an unpowered roboport with debris around them and fails the check when the powered one marks nothing or the unpowered one marks something.
 
 A failing check names the problem in the pull request's check report; the full Factorio log is in the workflow run.
 
 ## Release
 
-Build the mod portal package from the committed state (`HEAD`):
+Releases are made on GitHub only: **Actions → Release → Run workflow** on `main`, choosing which part of the version to raise (`patch` by default, `minor`, or `major`).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\package.ps1
-```
+The workflow then
 
-- Output: `dist/<name>_<version>.zip`, with name and version read from `info.json`, so the package version always matches the version shown in-game.
-- The package contains only runtime files (`info.json`, `changelog.txt`, `thumbnail.png`, top-level `*.lua`, `locale/`, `migrations/`, `prototypes/`, `graphics/`). Extend `$runtimePatterns` in `tools/package.ps1` when the mod gains other runtime folders.
-- Bump `version` in `info.json` and commit before building; the mod portal rejects a version that was already uploaded.
-- Upload the zip on the mod portal, or drop it into `%APPDATA%\Factorio\mods` to test it (remove the development junction first so the mod is not present twice).
+1. raises `version` in `info.json` (e.g. 0.1.0 → 0.1.1),
+2. runs the same checks as for pull requests against that version, which builds the package and loads it in Factorio,
+3. records the version commit on `main`,
+4. publishes a GitHub release tagged with the version, with the package `<name>_<version>.zip` attached.
+
+When a check fails, nothing is pushed: no version change, no tag, no release.
+
+- The package contains only runtime files (`info.json`, `changelog.txt`, `thumbnail.png`, top-level `*.lua`, `locale/`, `migrations/`, `prototypes/`, `graphics/`). Extend `$runtimePatterns` in `tools/package.ps1`, the build step used by the workflows, when the mod gains other runtime folders.
+- Uploading the package to the mod portal is a manual step: download it from the GitHub release.
+- `main` only takes changes through pull requests. The workflow pushes the version commit as a GitHub App that is a bypass actor of that rule; it expects the app's ID in the repository variable `RELEASE_APP_ID` and its private key in the secret `RELEASE_APP_PRIVATE_KEY`.
