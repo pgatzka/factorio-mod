@@ -63,11 +63,23 @@ Releases are made on GitHub only: **Actions → Release → Run workflow** on `m
 The workflow then
 
 1. raises `version` in `info.json` (e.g. 0.1.0 → 0.1.1),
-2. runs the same checks as for pull requests against that version, which builds the package and loads it in Factorio,
-3. records the version commit on `main`,
-4. publishes a GitHub release tagged with the version, with the package `<name>_<version>.zip` attached.
+2. adds the new version to `changelog.txt`, the changelog Factorio shows in-game and the mod portal shows on the mod page (see below),
+3. runs the same checks as for pull requests against that state, which builds the package and loads it in Factorio, changelog included,
+4. records the release commit (`info.json` and `changelog.txt`) on `main`,
+5. publishes a GitHub release tagged with the version, with the package `<name>_<version>.zip` attached and the new changelog entries as release notes.
 
-When a check fails, nothing is pushed: no version change, no tag, no release.
+When a check fails, nothing is pushed: no version change, no changelog entry, no tag, no release.
+
+The changelog is written from the pull requests merged since the last release, one entry each, worded like the issue the pull request belongs to. Labels decide where an entry goes:
+
+| Label on the pull request | Changelog |
+|---|---|
+| `enhancement` | Features |
+| `bug` | Bugfixes |
+| `internal` | no entry: tooling and other things players do not notice |
+| anything else | Changes |
+
+A release without any listed pull request gets the single entry "No player-facing changes." `changelog.txt` is never edited by hand.
 
 - The package contains only runtime files (`info.json`, `changelog.txt`, `thumbnail.png`, `LICENSE`, top-level `*.lua`, `locale/`, `migrations/`, `prototypes/`, `graphics/`). Extend `$runtimePatterns` in `tools/package.ps1`, the build step used by the workflows, when the mod gains other runtime folders.
 - Uploading the package to the mod portal is a manual step: download it from the GitHub release.
