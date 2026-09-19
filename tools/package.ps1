@@ -8,6 +8,7 @@ $runtimePatterns = @(
     'info.json',
     'changelog.txt',
     'thumbnail.png',
+    'LICENSE',
     '*.lua',
     'locale',
     'migrations',
