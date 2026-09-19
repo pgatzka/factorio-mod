@@ -51,6 +51,7 @@ Then start Factorio and enable the mod in the mod list.
 Every push to a pull request runs the "Mod checks" workflow:
 
 - `info.json` is valid and has the fields Factorio requires.
+- `changelog.txt`, once it exists, is in exactly the format Factorio accepts and its newest version matches `info.json` (headless Factorio does not read the changelog, so this is checked separately).
 - All Lua files are syntactically correct.
 - The release package builds, loads in the current stable headless Factorio with the base game alone, and its scripts run without errors. A small harness mod (`.github/ci/harness`) builds a powered and an unpowered roboport with debris around them and fails the check when the powered one marks nothing or the unpowered one marks something.
 
