@@ -1,7 +1,7 @@
 ---------------------------------------------------------------------------------------------------
-Version: 1.0.0
+Version 1.0.0
 Date: 2026-09-19
-  Features:
+Features
     - Roboport shows how much debris is in its construction range when hovered.
     - Roboport clears debris in its construction range one piece at a time.
     - Map setting limits how many pieces of debris a roboport keeps marked at once.

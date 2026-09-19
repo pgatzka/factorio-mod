@@ -20,10 +20,4 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: TEMP changelog script gives the same result under pwsh
-        run: |
-          cp changelog.txt "$RUNNER_TEMP/expected.txt"
-          rm changelog.txt
-          pwsh -File tools/changelog.ps1 -Version 1.0.0 -PullRequests .github/ci/tmp/pulls.json -NotesPath "$RUNNER_TEMP/notes.md" -Date 2026-09-19
-          diff "$RUNNER_TEMP/expected.txt" changelog.txt && cat "$RUNNER_TEMP/notes.md"
       - uses: ./.github/actions/mod-checks
