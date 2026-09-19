@@ -14,6 +14,8 @@ on:
         default: patch
 permissions:
   contents: write
+  issues: read
+  pull-requests: read
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -42,14 +44,10 @@ jobs:
         with:
           token: ${{ steps.app.outputs.token }}
 
-      # The commit stays local until the checks have passed: a failing release
-      # leaves neither a version change nor a tag behind.
       - name: Raise the version
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           current=$(jq -r '.version' info.json)
           if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -74,19 +72,55 @@ jobs:
             echo "::error file=info.json::Could not write version $new."
             exit 1
           fi
-
-          bot="${APP_SLUG}[bot]"
-          git config user.name "$bot"
-          git config user.email "$(gh api "/users/$bot" --jq '.id')+$bot@users.noreply.github.com"
-          git commit --quiet --message "release $new" info.json
           echo "version=$new" >> "$GITHUB_OUTPUT"
           echo "Releasing $current -> $new"
 
-      # Builds the package from the version commit and loads it in Factorio; the
-      # package it leaves in dist/ is the one that gets released.
+      # One entry per pull request merged since the last release. Pull request
+      # titles are lowercased copies of their issue's title, so the issue's own
+      # wording is used where the title names one.
+      - name: Write the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          since=$(gh release view --json publishedAt --jq '.publishedAt' 2> /dev/null || true)
+          search=""
+          if [ -n "$since" ]; then search="merged:>$since"; fi
+          gh pr list --state merged --base "${{ github.event.repository.default_branch }}" --limit 1000 \
+            --search "$search" --json number,title,labels > "$RUNNER_TEMP/merged.json"
+
+          echo '[]' > "$RUNNER_TEMP/pulls.json"
+          while IFS= read -r pull; do
+            issue=$(jq -r '.title | capture("^#(?<issue>[0-9]+) ").issue // empty' <<< "$pull")
+            if [ -n "$issue" ] && title=$(gh issue view "$issue" --json title --jq '.title' 2> /dev/null); then
+              pull=$(jq -c --arg title "$title" '.title = $title' <<< "$pull")
+            fi
+            jq -c --argjson pull "$pull" '. + [$pull]' "$RUNNER_TEMP/pulls.json" > "$RUNNER_TEMP/pulls.tmp"
+            mv "$RUNNER_TEMP/pulls.tmp" "$RUNNER_TEMP/pulls.json"
+          done < <(jq -c '.[]' "$RUNNER_TEMP/merged.json")
+
+          bash tools/changelog.sh "$VERSION" "$RUNNER_TEMP/pulls.json" "$RUNNER_TEMP/release-notes.md"
+
+      # The commit stays local until the checks have passed: a failing release
+      # leaves neither a version change nor a tag behind.
+      - name: Commit the release
+        env:
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bot="${APP_SLUG}[bot]"
+          git config user.name "$bot"
+          git config user.email "$(gh api "/users/$bot" --jq '.id')+$bot@users.noreply.github.com"
+          git add info.json changelog.txt
+          git commit --quiet --message "release $VERSION"
+
+      # Builds the package from the release commit and loads it in Factorio, which
+      # also has to accept the new changelog; the package it leaves in dist/ is
+      # the one that gets released.
       - uses: ./.github/actions/mod-checks
 
-      - name: Record the version on the default branch
+      - name: Record the release on the default branch
         run: git push origin "HEAD:${{ github.event.repository.default_branch }}"
 
       - name: Publish the GitHub release
@@ -98,4 +132,4 @@ jobs:
           gh release create "$VERSION" "dist/${name}_${VERSION}.zip" \
             --target "$(git rev-parse HEAD)" \
             --title "$VERSION" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/release-notes.md"
