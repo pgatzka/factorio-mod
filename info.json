@@ -1,9 +1,10 @@
 {
-  "name": "factorio-mod",
+  "name": "tidy-roboports",
   "version": "0.1.0",
-  "title": "Factorio Mod (placeholder)",
+  "title": "Tidy Roboports",
   "author": "Philipp Gatzka",
+  "homepage": "https://github.com/pgatzka/tidy-roboports",
   "factorio_version": "2.0",
   "dependencies": ["base >= 2.0"],
-  "description": "Roboports show the amount of debris in their construction range when hovered and clear it a configurable number of pieces at a time. Name and theme are not decided yet."
+  "description": "Roboports keep their surroundings tidy. Hover over a roboport to see how much debris (items on the ground, trees, rocks, cliffs) is in its construction range. Each roboport marks that debris for deconstruction one piece at a time, so robots clear the area gradually; a map setting raises how many pieces may be marked at once (0 turns it off). Debris robots cannot remove is skipped, and roboports without full power pause."
 }

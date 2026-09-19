@@ -2,7 +2,7 @@
 -- in the roboport's info panel while a player hovers over it, and lets
 -- roboports mark that debris for deconstruction, limited by a map setting.
 
-local MAX_MARKED_SETTING = "factorio-mod-max-marked-debris"
+local MAX_MARKED_SETTING = "tidy-roboports-max-marked-debris"
 
 -- At most one roboport is visited per tick, so the time spent per tick does
 -- not grow with the number of roboports. Visits are spaced out so that every
@@ -320,7 +320,7 @@ script.on_event(defines.events.on_selected_entity_changed, function(event)
     selected.custom_status = nil
     selected.custom_status = {
       diode = get_diode(selected),
-      label = { "factorio-mod.debris-in-range", count_debris(selected) },
+      label = { "tidy-roboports.debris-in-range", count_debris(selected) },
     }
   end
 end)
