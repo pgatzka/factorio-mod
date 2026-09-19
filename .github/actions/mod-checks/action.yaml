@@ -1,6 +1,6 @@
 name: Mod checks
 description: >-
-  Checks the mod in the checked-out repository: info.json, Lua syntax, and that
+  Checks the mod in the checked-out repository: info.json, changelog, Lua syntax, and that
   the release package built from HEAD loads and runs in headless Factorio.
 runs:
   using: composite
@@ -18,6 +18,52 @@ runs:
           echo "::error file=info.json::info.json is not valid JSON or lacks a valid name, version, title, author, or factorio_version"
           exit 1
         }
+
+    # Headless Factorio does not read the changelog, so a malformed one would
+    # only show up in players' games. Factorio accepts nothing but this format.
+    - name: Check changelog.txt
+      shell: bash
+      run: |
+        [ -f changelog.txt ] || exit 0
+        version=$(jq -r '.version' info.json)
+        awk -v version="$version" '
+          function fail(message) {
+            printf "::error file=changelog.txt,line=%d::%s\n", NR, message
+            failed = 1
+          }
+          /\r$/ { fail("Line ends with a carriage return."); next }
+          /\t/ { fail("Tabs are not allowed.") }
+          /[ ]+$/ { fail("Trailing spaces are not allowed.") }
+          /^-+$/ {
+            if (length($0) != 99) fail("A separator line has exactly 99 dashes.")
+            if (state == "category") fail("The category above has no entries.")
+            if (state == "version" || state == "date") fail("The version above has no categories.")
+            state = "separator"; next
+          }
+          state == "separator" {
+            if ($0 !~ /^Version: [0-9]+\.[0-9]+\.[0-9]+$/) fail("Expected \"Version: <major>.<minor>.<patch>\" after the separator.")
+            number = substr($0, 10)
+            if (number in seen) fail("Version " number " appears twice.")
+            seen[number] = 1
+            if (!first) first = number
+            state = "version"; next
+          }
+          state == "version" && /^Date: .+/ { state = "date"; next }
+          /^  [A-Z][A-Za-z ]*:$/ && (state == "version" || state == "date" || state == "entry") { state = "category"; next }
+          /^    - [^ ]/ && (state == "category" || state == "entry") { state = "entry"; next }
+          /^      [^ ]/ && state == "entry" { next }
+          { fail("Unexpected line; expected a separator, version, date, category (two spaces, ends with a colon), or entry (four spaces and \"- \").") }
+          END {
+            if (NR == 0) { print "::error file=changelog.txt::The changelog is empty."; failed = 1 }
+            if (state == "category") fail("The last category has no entries.")
+            if (state == "separator" || state == "version" || state == "date") fail("The last version has no categories.")
+            if (first && first != version) {
+              printf "::error file=changelog.txt,line=2::The newest changelog version is %s, but info.json says %s.\n", first, version
+              failed = 1
+            }
+            exit failed
+          }
+        ' changelog.txt
 
     - name: Check Lua syntax
       shell: bash
